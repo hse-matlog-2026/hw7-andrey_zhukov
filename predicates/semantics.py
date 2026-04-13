@@ -15,6 +15,7 @@ from predicates.syntax import *
 #: A generic type for a universe element in a model.
 T = TypeVar('T')
 
+
 @frozen
 class Model(Generic[T]):
     """An immutable model for predicate-logic constructs.
@@ -74,7 +75,7 @@ class Model(Generic[T]):
             assert is_relation(relation)
             relation_interpretation = relation_interpretations[relation]
             if len(relation_interpretation) == 0:
-                arity = -1 # any
+                arity = -1  # any
             else:
                 some_arguments = next(iter(relation_interpretation))
                 arity = len(some_arguments)
@@ -121,10 +122,10 @@ class Model(Generic[T]):
                str(self.constant_interpretations) + \
                '; Relation Interpretations=' + \
                str(self.relation_interpretations) + \
-               ('; Function Interpretations=' + \
+               ('; Function Interpretations=' +
                 str(self.function_interpretations)
                 if len(self.function_interpretations) > 0 else '')
-        
+
     def evaluate_term(self, term: Term,
                       assignment: Mapping[str, T] = frozendict()) -> T:
         """Calculates the value of the given term in the current model under the
@@ -143,10 +144,23 @@ class Model(Generic[T]):
         """
         assert term.constants().issubset(self.constant_interpretations.keys())
         assert term.variables().issubset(assignment.keys())
-        for function,arity in term.functions():
+        for function, arity in term.functions():
             assert function in self.function_interpretations and \
-                   self.function_arities[function] == arity
+                self.function_arities[function] == arity
         # Task 7.7
+
+        if is_constant(term.root):
+            return self.constant_interpretations[term.root]
+
+        if is_variable(term.root):
+            return assignment[term.root]
+
+        if is_function(term.root):
+            args_values = tuple(self.evaluate_term(arg, assignment)
+                                for arg in term.arguments)
+            return self.function_interpretations[term.root][args_values]
+
+        raise ValueError
 
     def evaluate_formula(self, formula: Formula,
                          assignment: Mapping[str, T] = frozendict()) -> bool:
@@ -169,13 +183,62 @@ class Model(Generic[T]):
         assert formula.constants().issubset(
             self.constant_interpretations.keys())
         assert formula.free_variables().issubset(assignment.keys())
-        for function,arity in formula.functions():
+        for function, arity in formula.functions():
             assert function in self.function_interpretations and \
-                   self.function_arities[function] == arity
-        for relation,arity in formula.relations():
+                self.function_arities[function] == arity
+        for relation, arity in formula.relations():
             assert relation in self.relation_interpretations and \
-                   self.relation_arities[relation] in {-1, arity}
+                self.relation_arities[relation] in {-1, arity}
         # Task 7.8
+
+        if hasattr(formula, 'arguments') and formula.arguments is not None:
+            if is_equality(formula.root):
+                left_val = self.evaluate_term(formula.arguments[0], assignment)
+                right_val = self.evaluate_term(
+                    formula.arguments[1], assignment)
+                return left_val == right_val
+
+            if is_relation(formula.root):
+                args_values = tuple(self.evaluate_term(arg, assignment)
+                                    for arg in formula.arguments)
+                return args_values in self.relation_interpretations[formula.root]
+
+        if is_unary(formula.root):
+            return not self.evaluate_formula(formula.first, assignment)
+
+        if is_binary(formula.root):
+            left_val = self.evaluate_formula(formula.first, assignment)
+            right_val = self.evaluate_formula(formula.second, assignment)
+
+            if formula.root == '&':
+                return left_val and right_val
+            if formula.root == '|':
+                return left_val or right_val
+            if formula.root == '->':
+                return (not left_val) or right_val
+
+        if is_quantifier(formula.root):
+            var = formula.variable
+
+            for element in self.universe:
+                new_assignment = dict(assignment)
+                new_assignment[var] = element
+
+                if formula.root == 'A':
+                    if not self.evaluate_formula(
+                            formula.statement, new_assignment):
+                        return False
+                else:
+                    if self.evaluate_formula(
+                            formula.statement, new_assignment):
+                        return True
+
+            if formula.root == 'A':
+                return True
+
+            return False
+
+        raise ValueError
 
     def is_model_of(self, formulas: AbstractSet[Formula]) -> bool:
         """Checks if the current model is a model of the given formulas.
@@ -193,10 +256,30 @@ class Model(Generic[T]):
         for formula in formulas:
             assert formula.constants().issubset(
                 self.constant_interpretations.keys())
-            for function,arity in formula.functions():
+            for function, arity in formula.functions():
                 assert function in self.function_interpretations and \
-                       self.function_arities[function] == arity
-            for relation,arity in formula.relations():
+                    self.function_arities[function] == arity
+            for relation, arity in formula.relations():
                 assert relation in self.relation_interpretations and \
-                       self.relation_arities[relation] in {-1, arity}
+                    self.relation_arities[relation] in {-1, arity}
         # Task 7.9
+
+        for formula in formulas:
+            free_vars = sorted(formula.free_variables())
+
+            def generate_assignments(vars_list, current_assignment):
+                if not vars_list:
+                    yield current_assignment
+                    return
+
+                var = vars_list[0]
+                for element in self.universe:
+                    new_assignment = dict(current_assignment)
+                    new_assignment[var] = element
+                    yield from generate_assignments(vars_list[1:], new_assignment)
+
+            for assignment in generate_assignments(free_vars, {}):
+                if not self.evaluate_formula(formula, assignment):
+                    return False
+
+        return True
